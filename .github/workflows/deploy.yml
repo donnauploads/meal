@@ -1,0 +1,64 @@
+name: Deploy API to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            echo "🚀 Starting deploy..."
+            cd ~/neobank
+
+            echo "📥 Pulling latest code..."
+            git pull origin main
+
+            echo "📦 Installing dependencies..."
+            pnpm install --frozen-lockfile
+
+            echo "🗄️  Running migrations..."
+            cd apps/api
+            # `migrate deploy` is the ONLY safe Prisma schema operation
+            # on production — it applies committed migrations and
+            # nothing else. We deliberately do NOT run:
+            #   • `migrate deploy || true` — failures must surface, not be
+            #     swallowed (otherwise the next step builds against an
+            #     outdated schema and crashes at runtime).
+            #   • `db push --accept-data-loss` — that's a dev-only command
+            #     that BOTH bypasses migrations AND auto-invokes the seed
+            #     script, which was repeatedly hitting P2002 on
+            #     `phoneE164` from re-seeding personas on every deploy.
+            #     If schema and migrations ever drift, fix the migration —
+            #     never paper over it with db push on prod.
+            pnpm exec prisma migrate deploy
+
+            echo "🔨 Building API..."
+            cd ~/neobank
+            NODE_OPTIONS="--max-old-space-size=2048" pnpm --filter=api build
+
+            echo "♻️  Restarting API..."
+            pm2 restart neobank-api
+
+            echo "✅ Deploy complete!"
+            pm2 status

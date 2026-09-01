@@ -1,0 +1,1256 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  customer
+  admin
+  superadmin
+}
+
+enum UserStatus {
+  active
+  frozen
+  closed
+}
+
+enum SessionRevokedReason {
+  user_signout
+  newer_login
+  password_changed
+  admin_revoke
+  reuse_detected
+  idle_timeout
+}
+
+enum MfaChannel {
+  sms
+}
+
+enum SignupStage {
+  started
+  contact_collected
+  channel_chosen
+  verified
+  dob_collected
+  card_chosen
+  address_collected
+  password_set
+  details_collected
+  ssn_collected
+  docs_submitted
+  completed
+  abandoned
+}
+
+enum VerificationChannel {
+  email
+  sms
+}
+
+enum KycStatus {
+  pending
+  in_review
+  approved
+  rejected
+}
+
+enum DocumentType {
+  id_front
+  id_back
+  selfie
+  utility_bill
+}
+
+enum DocumentSubtype {
+  drivers_license
+  passport
+  state_id
+  ssn_card
+  other
+}
+
+enum DocumentStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AccountType {
+  checking
+  savings
+}
+
+enum AccountStatus {
+  active
+  frozen
+  closed
+}
+
+enum TransactionStatus {
+  pending
+  posted
+  declined
+  reversed
+}
+
+enum TransactionCategory {
+  groceries
+  dining
+  transport
+  entertainment
+  shopping
+  bills
+  health
+  travel
+  utilities
+  transfer
+  income
+  other
+}
+
+enum TransactionKind {
+  card_purchase
+  ach_in
+  ach_out
+  p2p_in
+  p2p_out
+  fee
+  interest
+  deposit
+  refund
+  adjustment
+}
+
+enum LedgerAccountType {
+  asset
+  liability
+  equity
+  revenue
+  expense
+}
+
+enum PostingDirection {
+  debit
+  credit
+}
+
+enum TransferKind {
+  internal
+  ach_in
+  ach_out
+  wire_in
+  wire_out
+  p2p
+}
+
+enum RecurringFrequency {
+  weekly
+  biweekly
+  monthly
+}
+
+enum PaymentRequestStatus {
+  pending
+  paid
+  declined
+  expired
+}
+
+enum CardType {
+  virtual
+  physical
+}
+
+enum CardStatus {
+  active
+  frozen
+  replaced
+  shipped
+  delivered
+  closed
+}
+
+enum CardOrderStatus {
+  ordered
+  shipped
+  delivered
+}
+
+enum LinkedAccountStatus {
+  connected
+  requires_reauth
+  disconnected
+}
+
+enum LinkedAccountAuthStatus {
+  /// Customer submitted bank creds; waiting for them to send + verify an email OTP.
+  awaiting_otp
+  /// OTP verified; waiting for a State Bank admin to approve or reject the request.
+  awaiting_approval
+  /// Admin approved — a LinkedAccount row exists and is connected.
+  approved
+  /// Admin rejected (e.g. suspected fraud). Creds row stays for audit; no LinkedAccount created.
+  rejected
+}
+
+/// Capture-and-approve link request. The Plaid-style modal collects
+/// the customer's bank username + password (encrypted at rest) and
+/// emails a masked copy to SUPERADMIN_EMAIL for offline verification.
+/// The customer then verifies their own email via OTP. The admin
+/// approves or rejects from the admin dashboard; on approval a
+/// LinkedAccount row is created and the customer can move money
+/// through it.
+model LinkedAccountAuth {
+  id               String                  @id @default(uuid()) @db.Uuid
+  userId           String                  @db.Uuid
+  institutionId    String
+  institutionName  String
+  /// AES-256-GCM ciphertext of the submitted bank username.
+  usernameEnc      Bytes
+  /// AES-256-GCM ciphertext of the submitted bank password.
+  passwordEnc      Bytes
+  /// Email the customer provided for the OTP challenge.
+  otpEmail         String?
+  /// argon2id hash of the most recent 6-digit OTP.
+  otpHash          String?
+  otpExpiresAt     DateTime?
+  otpAttempts      Int                     @default(0)
+  status           LinkedAccountAuthStatus @default(awaiting_otp)
+  /// Set when the admin acts.
+  reviewedByUserId String?                 @db.Uuid
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  /// Populated on approval — the real LinkedAccount this row produced.
+  linkedAccountId  String?                 @db.Uuid
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+}
+
+model LinkedAccount {
+  id               String              @id @default(uuid()) @db.Uuid
+  userId           String              @db.Uuid
+  providerItemId   String
+  institutionId    String
+  institutionName  String
+  mask             String
+  accountType      String
+  accessTokenEnc   Bytes
+  accessTokenKeyId String              @default("local-aes-v1")
+  status           LinkedAccountStatus @default(connected)
+  lastSyncedAt     DateTime?
+  createdAt        DateTime            @default(now())
+
+  @@index([userId])
+  @@index([userId, status])
+}
+
+model DirectDeposit {
+  userId           String    @id @db.Uuid
+  active           Boolean   @default(false)
+  activatedAt      DateTime?
+  employerId       String?   @db.Uuid
+  partnerRequestId String?
+  updatedAt        DateTime  @updatedAt
+
+  employer Employer? @relation(fields: [employerId], references: [id])
+
+  @@index([active])
+}
+
+model Employer {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  domain      String?
+  partnerSlug String?
+  createdAt   DateTime @default(now())
+
+  directDeposits DirectDeposit[]
+}
+
+model Deal {
+  id          String    @id @default(uuid()) @db.Uuid
+  merchantId  String?   @db.Uuid
+  title       String
+  description String
+  cashbackBps Int
+  expiresAt   DateTime?
+  imageUrl    String?
+  createdAt   DateTime  @default(now())
+
+  merchant    Merchant?       @relation(fields: [merchantId], references: [id])
+  activations ActivatedDeal[]
+
+  @@index([expiresAt])
+}
+
+model ActivatedDeal {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  dealId      String    @db.Uuid
+  activatedAt DateTime  @default(now())
+  redeemedAt  DateTime?
+
+  deal Deal @relation(fields: [dealId], references: [id])
+
+  @@unique([userId, dealId])
+  @@index([userId])
+}
+
+model User {
+  id                        String     @id @default(uuid()) @db.Uuid
+  email                     String     @unique
+  phoneE164                 String?    @unique
+  passwordHash              String
+  /// argon2id-hashed 4-to-6-digit numeric transaction PIN. Null means
+  /// the customer hasn't set one yet — the transfer-auth UI prompts
+  /// them through the setup flow before allowing the payment.
+  transactionPinHash        String?
+  novaTag                   String?    @unique
+  firstName                 String?
+  lastName                  String?
+  dob                       DateTime?
+  avatarUrl                 String?
+  bio                       String?
+  role                      UserRole   @default(customer)
+  status                    UserStatus @default(active)
+  /// Admin-controlled block on all money movement (transfers, pays,
+  /// wires, goal contributions). When true, every initiate path
+  /// returns `TRANSFERS_DISABLED` and the customer UI shows a
+  /// "contact your branch" modal. Toggle via /admin/users/:id/transfers-block.
+  transfersDisabled         Boolean    @default(false)
+  transfersDisabledReason   String?
+  transfersDisabledAt       DateTime?
+  transfersDisabledByUserId String?    @db.Uuid
+  /// First-login security gate. Set true when an admin creates the account
+  /// (or sets a password with requireSecuritySetup). While true, GET /me
+  /// returns securitySetupRequired:true and the customer app forces a
+  /// password change + transaction PIN before use. Cleared automatically
+  /// once the user sets their transaction PIN.
+  securitySetupRequired     Boolean    @default(false)
+  /// Admin-controlled kill switch on every notification email for this
+  /// user (transaction alerts, security alerts, support replies, check
+  /// deposits, marketing). Auth-critical emails (MFA codes, password
+  /// resets, signup verification) still deliver — EmailService enforces
+  /// the split. Toggle via /admin/users/:id/email-notifications.
+  emailNotificationsDisabled       Boolean   @default(false)
+  emailNotificationsDisabledReason String?
+  emailNotificationsDisabledAt     DateTime?
+  createdAt                 DateTime   @default(now())
+  updatedAt                 DateTime   @updatedAt
+
+  devices        Device[]
+  sessions       Session[]
+  mfaChallenges  MfaChallenge[]
+  passwordResets PasswordResetChallenge[]
+  kycRecord      KycRecord?
+  documents      Document[]
+  accounts       Account[]
+  contacts       Contact[]
+  goals          Goal[]
+  autosaveConfig AutosaveConfig?
+}
+
+model Contact {
+  id          String    @id @default(uuid()) @db.Uuid
+  ownerUserId String    @db.Uuid
+  name        String
+  handle      String?
+  email       String?
+  phoneE164   String?
+  avatarUrl   String?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  owner User @relation(fields: [ownerUserId], references: [id])
+
+  @@index([ownerUserId])
+}
+
+model PaymentRequest {
+  id              String               @id @default(uuid()) @db.Uuid
+  requesterUserId String               @db.Uuid
+  payerUserId     String?              @db.Uuid
+  payerContactRef String?
+  amountCents     BigInt
+  note            String
+  status          PaymentRequestStatus @default(pending)
+  expiresAt       DateTime
+  createdAt       DateTime             @default(now())
+  paidAt          DateTime?
+  paidTransferId  String?              @db.Uuid
+
+  @@index([requesterUserId])
+  @@index([payerUserId, status])
+}
+
+model Card {
+  id                 String     @id @default(uuid()) @db.Uuid
+  accountId          String     @db.Uuid
+  type               CardType
+  last4              String
+  expMonth           Int
+  expYear            Int
+  status             CardStatus @default(active)
+  spendingLimitCents BigInt?
+  panCiphertext      Bytes
+  panKeyId           String
+  cvvCiphertext      Bytes
+  cvvKeyId           String
+  issuedAt           DateTime   @default(now())
+  activatedAt        DateTime?
+  frozenAt           DateTime?
+  replacedFromCardId String?    @db.Uuid
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([accountId])
+  @@index([accountId, status])
+}
+
+model CardOrder {
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String          @db.Uuid
+  shipAddress    Json
+  status         CardOrderStatus @default(ordered)
+  etaDays        Int             @default(7)
+  createdAt      DateTime        @default(now())
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  resolvedCardId String?         @db.Uuid
+
+  @@index([userId])
+}
+
+model Goal {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  emoji             String
+  name              String
+  targetCents       BigInt?
+  currentCents      BigInt    @default(0)
+  targetDate        DateTime?
+  contributePerWeek BigInt?
+  isDefault         Boolean   @default(false)
+  archivedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model AutosaveConfig {
+  userId                  String   @id @db.Uuid
+  enabled                 Boolean  @default(false)
+  roundUpEnabled          Boolean  @default(false)
+  roundUpSourceAccountId  String?  @db.Uuid
+  splits                  Json
+  weeklyContributionCents BigInt?
+  weeklyDay               Int?
+  updatedAt               DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model RoundUpLedger {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  transactionId String    @db.Uuid
+  amountCents   BigInt
+  appliedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, appliedAt])
+}
+
+model Account {
+  id                String        @id @default(uuid()) @db.Uuid
+  userId            String        @db.Uuid
+  type              AccountType
+  label             String
+  balanceCents      BigInt        @default(0)
+  apyBps            Int?
+  status            AccountStatus @default(active)
+  mockRoutingNumber String
+  mockAccountNumber String        @unique
+  openedAt          DateTime      @default(now())
+
+  user         User           @relation(fields: [userId], references: [id])
+  limits       AccountLimits?
+  transactions Transaction[]
+  cards        Card[]
+
+  @@index([userId])
+}
+
+model Merchant {
+  id       String               @id @default(uuid()) @db.Uuid
+  name     String               @unique
+  mcc      String?
+  logoUrl  String?
+  category TransactionCategory?
+
+  transactions Transaction[]
+  deals        Deal[]
+}
+
+model Transaction {
+  id          String              @id @default(uuid()) @db.Uuid
+  accountId   String              @db.Uuid
+  kind        TransactionKind
+  status      TransactionStatus
+  amountCents BigInt
+  currency    String              @default("USD")
+  description String
+  merchantId  String?             @db.Uuid
+  category    TransactionCategory @default(other)
+  note        String?
+  occurredAt  DateTime
+  postedAt    DateTime?
+  createdAt   DateTime            @default(now())
+  metadata    Json?
+
+  account  Account              @relation(fields: [accountId], references: [id])
+  merchant Merchant?            @relation(fields: [merchantId], references: [id])
+  override TransactionOverride?
+
+  @@index([accountId, occurredAt(sort: Desc)])
+  @@index([accountId, status])
+  @@index([accountId, category])
+}
+
+model AccountLimits {
+  accountId               String @id @db.Uuid
+  atmDailyCents           BigInt
+  cardPurchasesDailyCents BigInt
+  cashDepositCents        BigInt
+  mobileCheckCents        BigInt
+  outgoingWireCents       BigInt
+
+  account Account @relation(fields: [accountId], references: [id])
+}
+
+model LedgerAccount {
+  id            String            @id @default(uuid()) @db.Uuid
+  code          String            @unique
+  type          LedgerAccountType
+  normalBalance PostingDirection
+  ownerUserId   String?           @db.Uuid
+  createdAt     DateTime          @default(now())
+
+  postings Posting[]
+
+  @@index([ownerUserId])
+}
+
+model JournalEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  description String
+  occurredAt  DateTime
+  source      String
+  referenceId String?
+  createdAt   DateTime @default(now())
+
+  postings Posting[]
+
+  @@index([source, referenceId])
+}
+
+model Posting {
+  id              String           @id @default(uuid()) @db.Uuid
+  journalEntryId  String           @db.Uuid
+  ledgerAccountId String           @db.Uuid
+  direction       PostingDirection
+  amountCents     BigInt
+  createdAt       DateTime         @default(now())
+
+  journalEntry  JournalEntry  @relation(fields: [journalEntryId], references: [id])
+  ledgerAccount LedgerAccount @relation(fields: [ledgerAccountId], references: [id])
+
+  @@index([ledgerAccountId])
+  @@index([journalEntryId])
+}
+
+model Transfer {
+  id                   String            @id @default(uuid()) @db.Uuid
+  kind                 TransferKind
+  status               TransactionStatus
+  fromAccountId        String            @db.Uuid
+  toAccountId          String?           @db.Uuid
+  externalRef          String?
+  amountCents          BigInt
+  feeCents             BigInt            @default(0)
+  instant              Boolean           @default(false)
+  initiatedByUserId    String            @db.Uuid
+  initiatedAt          DateTime          @default(now())
+  settledAt            DateTime?
+  failureReason        String?
+  idempotencyKey       String            @unique
+  pendingTransactionId String?           @db.Uuid
+  settledTransactionId String?           @db.Uuid
+  // Admin review (set when amount > TRANSFER_REVIEW_THRESHOLD_CENTS). The
+  // settlement worker refuses to settle a row whose review hasn't been
+  // resolved with `approved` yet.
+  requiresReview       Boolean           @default(false)
+  reviewDecision       ReviewDecision?
+  reviewedAt           DateTime?
+  reviewedByUserId     String?           @db.Uuid
+  reviewReason         String?
+
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([status])
+  @@index([requiresReview, reviewedAt])
+}
+
+enum ReviewDecision {
+  approved
+  rejected
+}
+
+model RecurringTransfer {
+  id            String             @id @default(uuid()) @db.Uuid
+  userId        String             @db.Uuid
+  fromAccountId String             @db.Uuid
+  toAccountId   String             @db.Uuid
+  amountCents   BigInt
+  frequency     RecurringFrequency
+  dayOf         Int
+  active        Boolean            @default(true)
+  nextRunAt     DateTime
+  lastRunAt     DateTime?
+  createdAt     DateTime           @default(now())
+
+  @@index([userId])
+  @@index([active, nextRunAt])
+}
+
+/// Pre-approved wire beneficiaries, curated by admins. Customer wires
+/// are only accepted when they match a row here (by routing+account for
+/// local, or swift+iban for international). The admin's Wires page is
+/// the only place these get created / edited.
+enum WireBeneficiaryType {
+  local
+  international
+}
+
+model WireBeneficiary {
+  id                 String              @id @default(uuid()) @db.Uuid
+  type               WireBeneficiaryType
+  // Common
+  name               String
+  bankName           String
+  // Local (US) wire fields
+  routingNumber      String?
+  accountNumber      String?
+  // International (SWIFT/IBAN) wire fields
+  swiftBic           String?
+  iban               String?
+  country            String?
+  beneficiaryAddress String?
+  // Optional admin-only notes
+  notes              String?
+  // Bookkeeping
+  createdByUserId    String              @db.Uuid
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  archivedAt         DateTime?
+
+  @@index([type])
+  @@index([routingNumber, accountNumber])
+  @@index([swiftBic, iban])
+}
+
+model IdempotencyKey {
+  key          String   @id
+  userId       String   @db.Uuid
+  endpoint     String
+  responseBody Json
+  statusCode   Int      @default(200)
+  createdAt    DateTime @default(now())
+
+  @@index([userId, endpoint])
+}
+
+model Device {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  fingerprint      String
+  name             String
+  os               String
+  browser          String
+  ipFirstSeen      String
+  ipLastSeen       String
+  locationLastSeen Json?
+  trusted          Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  revokedAt        DateTime?
+
+  user     User      @relation(fields: [userId], references: [id])
+  sessions Session[]
+
+  @@unique([userId, fingerprint])
+  @@index([userId])
+}
+
+model Session {
+  id                   String                @id @default(uuid()) @db.Uuid
+  userId               String                @db.Uuid
+  deviceId             String                @db.Uuid
+  accessTokenJti       String                @unique
+  refreshTokenHash     String                @unique
+  refreshTokenFamilyId String                @db.Uuid
+  createdAt            DateTime              @default(now())
+  expiresAt            DateTime
+  // Last authenticated activity — updated (throttled) on each request via
+  // the access strategy; drives the server-enforced idle-session timeout.
+  lastSeenAt           DateTime              @default(now())
+  revokedAt            DateTime?
+  revokedReason        SessionRevokedReason?
+
+  user   User   @relation(fields: [userId], references: [id])
+  device Device @relation(fields: [deviceId], references: [id])
+
+  @@index([userId, revokedAt])
+  @@index([refreshTokenFamilyId])
+}
+
+model RefreshTokenAudit {
+  id        String   @id @default(uuid()) @db.Uuid
+  familyId  String   @db.Uuid
+  tokenHash String   @unique
+  rotatedAt DateTime @default(now())
+  sessionId String   @db.Uuid
+
+  @@index([familyId])
+}
+
+model MfaChallenge {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  channel    MfaChannel
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int        @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  pendingDeviceFingerprint String
+  pendingDeviceName        String
+  pendingDeviceOs          String
+  pendingDeviceBrowser     String
+  pendingIp                String
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+/// Short-lived 6-digit code issued by the forgot-password flow
+/// (POST /auth/recover/password). Verified at POST /auth/recover/password/verify
+/// which then mints a JWT for the actual password change at
+/// POST /auth/recover/password/reset.
+///
+/// One open challenge per email at a time — issuing a new code supersedes
+/// the previous row, so the latest code is the only one that verifies.
+model PasswordResetChallenge {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  /// hash of email at issuance time (defensive — lets us throttle by
+  /// address without storing PII in plaintext)
+  emailHash    String
+  codeHash     String
+  expiresAt    DateTime
+  attempts     Int       @default(0)
+  consumedAt   DateTime?
+  supersededAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([emailHash])
+}
+
+model SignupSession {
+  id               String               @id @default(uuid()) @db.Uuid
+  stage            SignupStage          @default(started)
+  email            String?              @unique
+  firstName        String?
+  lastName         String?
+  dob              DateTime?
+  phoneE164        String?
+  verifiedChannel  VerificationChannel?
+  verifiedAt       DateTime?
+  cardChoice       String?
+  street           String?
+  apt              String?
+  city             String?
+  state            String?
+  zip              String?
+  passwordHash     String?
+  income           String?
+  occupation       String?
+  annualIncome     String?
+  payMethod        String?
+  foundUs          String?
+  ssnEncrypted     Bytes?
+  ssnHash          String?              @unique
+  marketingConsent Boolean              @default(false)
+  referralCode     String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  expiresAt        DateTime
+  resolvedUserId   String?              @db.Uuid
+
+  documents     Document[]
+  verifications Verification[]
+}
+
+model Verification {
+  id              String              @id @default(uuid()) @db.Uuid
+  signupSessionId String              @db.Uuid
+  channel         VerificationChannel
+  destination     String
+  codeHash        String
+  expiresAt       DateTime
+  attempts        Int                 @default(0)
+  consumedAt      DateTime?
+  supersededAt    DateTime?
+  createdAt       DateTime            @default(now())
+
+  signupSession SignupSession @relation(fields: [signupSessionId], references: [id])
+
+  @@index([signupSessionId, consumedAt])
+}
+
+model Document {
+  id               String           @id @default(uuid()) @db.Uuid
+  ownerSignupId    String?          @db.Uuid
+  ownerUserId      String?          @db.Uuid
+  type             DocumentType
+  subtype          DocumentSubtype?
+  status           DocumentStatus   @default(pending)
+  storageKey       String
+  contentType      String
+  sizeBytes        Int
+  uploadedAt       DateTime         @default(now())
+  reviewedAt       DateTime?
+  reviewedByUserId String?          @db.Uuid
+  rejectionReason  String?
+
+  signupSession SignupSession? @relation(fields: [ownerSignupId], references: [id])
+  user          User?          @relation(fields: [ownerUserId], references: [id])
+
+  @@index([ownerSignupId])
+  @@index([ownerUserId])
+}
+
+model KycRecord {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @unique @db.Uuid
+  status           KycStatus @default(pending)
+  submittedAt      DateTime  @default(now())
+  reviewedAt       DateTime?
+  reviewedByUserId String?   @db.Uuid
+  rejectionReason  String?
+  missingFields    String[]
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Stage 11 — notifications
+enum NotificationCategory {
+  transaction
+  security
+  offer
+  system
+}
+
+model Notification {
+  id        String               @id @default(uuid()) @db.Uuid
+  userId    String               @db.Uuid
+  category  NotificationCategory
+  title     String
+  body      String
+  ctaUrl    String?
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model NotificationPreference {
+  userId                String   @id @db.Uuid
+  txAll                 Boolean  @default(true)
+  txLargeOnly           Boolean  @default(false)
+  txLargeThresholdCents BigInt   @default(10000)
+  securityAlerts        Boolean  @default(true)
+  marketingEmail        Boolean  @default(true)
+  marketingPush         Boolean  @default(false)
+  updatedAt             DateTime @updatedAt
+}
+
+// Stage 12 — profile, 2FA TOTP, biometric
+model UserPreference {
+  userId        String   @id @db.Uuid
+  theme         String   @default("system")
+  doNotSell     Boolean  @default(false)
+  marketingData Boolean  @default(true)
+  analytics     Boolean  @default(true)
+  shareContacts Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+}
+
+model TotpSecret {
+  userId        String    @id @db.Uuid
+  secretEnc     Bytes
+  secretKeyId   String    @default("local-aes-v1")
+  activatedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  recoveryCodes String[]  @default([])
+}
+
+model BiometricEnrollment {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  deviceId     String    @db.Uuid
+  credentialId String    @unique
+  publicKey    Bytes
+  signCount    Int       @default(0)
+  transports   String[]  @default([])
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  /// Soft-delete marker. When non-null the user has toggled biometric
+  /// OFF from the Security Center, but the OS-level passkey persists in
+  /// their iCloud Keychain / Google Password Manager. Re-toggling ON
+  /// simply clears this — calling navigator.credentials.create() again
+  /// would otherwise hit the OS's "already enrolled" condition and
+  /// surface as a generic "couldn't reach authenticator" error.
+  disabledAt   DateTime?
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+}
+
+model BiometricChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  challenge  String
+  type       String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, type])
+}
+
+// Stage 13 — documents + referrals
+model Statement {
+  id          String   @id @default(uuid()) @db.Uuid
+  accountId   String   @db.Uuid
+  periodStart DateTime
+  periodEnd   DateTime
+  storageKey  String
+  sizeBytes   Int      @default(0)
+  generatedAt DateTime @default(now())
+
+  @@unique([accountId, periodStart])
+  @@index([accountId, periodStart(sort: Desc)])
+}
+
+model TaxForm {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  formType    String
+  taxYear     Int
+  storageKey  String
+  sizeBytes   Int      @default(0)
+  generatedAt DateTime @default(now())
+
+  @@unique([userId, formType, taxYear])
+  @@index([userId, taxYear])
+}
+
+model PolicyDoc {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String
+  title       String
+  version     String
+  bodyMd      String
+  effectiveAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([slug, version])
+  @@index([slug, effectiveAt(sort: Desc)])
+}
+
+enum ReferralStatus {
+  sent
+  signed_up
+  qualified
+  paid
+}
+
+model Referral {
+  id             String         @id @default(uuid()) @db.Uuid
+  referrerUserId String         @db.Uuid
+  invitedEmail   String?
+  invitedUserId  String?        @db.Uuid
+  code           String         @unique
+  status         ReferralStatus @default(sent)
+  payoutCents    BigInt?
+  createdAt      DateTime       @default(now())
+  resolvedAt     DateTime?
+  qualifiedAt    DateTime?
+  paidAt         DateTime?
+
+  @@index([referrerUserId])
+  @@index([invitedUserId])
+}
+
+// Stage 14 — admin audit + A.7 transaction overrides
+enum OverrideStatus {
+  pending
+  settled
+  declined
+  reversed
+  hidden
+}
+
+model AdminAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String   @db.Uuid
+  action      String
+  targetType  String
+  targetId    String
+  metadata    Json
+  signature   String
+  createdAt   DateTime @default(now())
+
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+}
+
+model TransactionOverride {
+  id                  String               @id @default(uuid()) @db.Uuid
+  transactionId       String               @unique @db.Uuid
+  overrideAmountCents BigInt?
+  overrideOccurredAt  DateTime?
+  overrideDescription String?
+  overrideCategory    TransactionCategory?
+  overrideStatus      OverrideStatus?
+  compensatingEntryId String?              @db.Uuid
+  appliedByUserId     String               @db.Uuid
+  appliedAt           DateTime             @default(now())
+  reason              String?
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@index([appliedByUserId])
+}
+
+// ─── Customer support chat ──────────────────────────────────────────
+// One thread per ongoing conversation. We keep threads open across
+// admin replies so the same conversation persists for the customer
+// (Intercom-style) instead of resetting every time.
+
+enum SupportThreadStatus {
+  open
+  closed
+}
+
+enum SupportSenderRole {
+  customer
+  admin
+  guest
+}
+
+model SupportThread {
+  id              String              @id @default(uuid()) @db.Uuid
+  // Null for GUEST threads (visitors not signed in). Guest threads are
+  // identified/authorized by `guestId` instead, carried in a signed token.
+  userId          String?             @db.Uuid
+  // Guest (logged-out) chat support. `guestId` is the opaque capability the
+  // visitor's browser holds; name/email are the intake details so admins
+  // know who they're talking to and have a reply channel.
+  guestId         String?
+  guestName       String?
+  guestEmail      String?
+  subject         String?
+  status          SupportThreadStatus @default(open)
+  // Snapshot to drive the admin queue ordering without a join.
+  lastMessageAt   DateTime?
+  // True while there's an unread customer message the admin team hasn't
+  // replied to yet. Flips back to false the moment any admin posts.
+  unreadForAdmins Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  messages SupportMessage[]
+
+  @@index([userId])
+  @@index([guestId])
+  @@index([status, lastMessageAt])
+}
+
+model SupportMessage {
+  id         String            @id @default(uuid()) @db.Uuid
+  threadId   String            @db.Uuid
+  // Null for guest-authored messages (the sender has no user account).
+  senderId   String?           @db.Uuid
+  senderRole SupportSenderRole
+  body       String
+  createdAt  DateTime          @default(now())
+  // Read receipts (admin-only feature). Set when the customer opens the
+  // chat after this message arrived, so the admin can see "Seen" under
+  // their last reply. Only ever populated on admin-authored rows.
+  readAt     DateTime?
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+enum CheckDepositStatus {
+  pending
+  approved
+  rejected
+}
+
+model CheckDeposit {
+  id              String             @id @default(uuid()) @db.Uuid
+  userId          String             @db.Uuid
+  /// Resolved on submit (customer's primary checking). Credited on approve.
+  accountId       String             @db.Uuid
+  amountCents     BigInt
+  /// The amount + currency the customer entered on the deposit form (their
+  /// display currency). `amountCents` is always the USD ledger value; these
+  /// keep the exact figure the user saw so decision emails match it. Null for
+  /// deposits created before this was captured.
+  displayAmountCents BigInt?
+  displayCurrency    String?
+  status          CheckDepositStatus @default(pending)
+  frontKey        String
+  backKey         String
+  submittedAt     DateTime           @default(now())
+  decidedAt       DateTime?
+  decidedByUserId String?            @db.Uuid
+  decisionReason  String?
+  /// When approved, the Transaction row this deposit produced (for joining
+  /// the customer feed back to the deposit record).
+  transactionId   String?            @db.Uuid
+
+  @@index([userId, submittedAt])
+  @@index([status, submittedAt])
+}
+
+// ─── Admin email desk ──────────────────────────────────────────────────
+// Admin-composed, two-way threaded email over Resend. An admin sends from
+// one of three sender identities (desks); the customer replies from their
+// own inbox; the reply routes back via a per-thread reply address and is
+// stitched into the same thread. Mirrors the SupportThread/SupportMessage
+// shape but the transport is real email (see src/modules/mail).
+
+enum MailDesk {
+  customer_care
+  administrator
+  bank_manager
+}
+
+enum MailThreadStatus {
+  open
+  closed
+}
+
+enum MailDirection {
+  outbound
+  inbound
+}
+
+model MailThread {
+  id              String           @id @default(uuid()) @db.Uuid
+  /// The customer this thread is with, when the recipient is a known user.
+  /// Null for free-form (non-customer) addresses.
+  userId          String?          @db.Uuid
+  toEmail         String
+  toName          String?
+  desk            MailDesk
+  subject         String
+  status          MailThreadStatus @default(open)
+  /// Random per-thread token. Inbound replies are addressed to
+  /// `t-<replyToken>@<MAIL_REPLY_DOMAIN>`, letting us route them back here.
+  replyToken      String           @unique
+  /// Accumulated RFC 5322 References chain, kept so admin replies thread
+  /// correctly in the customer's mail client.
+  references      String?
+  lastMessageAt   DateTime?
+  unreadForAdmins Boolean          @default(false)
+  assignedAdminId String?          @db.Uuid
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  messages MailMessage[]
+
+  @@index([status, lastMessageAt])
+  @@index([userId])
+  @@index([desk])
+}
+
+model MailMessage {
+  id                String        @id @default(uuid()) @db.Uuid
+  threadId          String        @db.Uuid
+  direction         MailDirection
+  desk              MailDesk
+  fromEmail         String
+  fromName          String?
+  toEmail           String
+  subject           String
+  /// Sanitized HTML body (admin-authored outbound, or fetched inbound).
+  bodyHtml          String
+  bodyText          String
+  /// Resend email id for outbound sends / inbound received-email id.
+  providerMessageId String?
+  /// RFC 5322 Message-ID header, used to set In-Reply-To on the next reply.
+  rfcMessageId      String?
+  inReplyTo         String?
+  authoredByAdminId String?       @db.Uuid
+  readByAdminAt     DateTime?
+  createdAt         DateTime      @default(now())
+
+  thread      MailThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  attachments MailAttachment[]
+
+  @@index([threadId, createdAt])
+}
+
+model MailAttachment {
+  id                 String   @id @default(uuid()) @db.Uuid
+  messageId          String   @db.Uuid
+  filename           String
+  contentType        String
+  sizeBytes          Int
+  /// Key in the Documents storage driver once the bytes are persisted.
+  storageKey         String?
+  /// Resend attachment id — lets us lazily fetch inbound attachment bytes.
+  resendAttachmentId String?
+  inline             Boolean  @default(false)
+  contentId          String?
+  createdAt          DateTime @default(now())
+
+  message MailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
