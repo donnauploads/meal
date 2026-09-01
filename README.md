@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # bank-demo backend
 
 pnpm monorepo. NestJS API in `apps/api`, shared types in `packages/api-contracts`, generated client placeholder in `packages/api-client`.
@@ -180,3 +181,6 @@ tooling/geoip               (drop GeoLite2-City.mmdb here)
 ```
 NEXT_PUBLIC_API_BASE=http://localhost:3001
 ```
+=======
+# meal
+>>>>>>> d630d31f350aa04441d9c0ecf6ab116d90a50a47
