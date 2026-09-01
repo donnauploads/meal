@@ -6,6 +6,27 @@ import { APP_NAME } from '../../common/brand';
 
 const PASSWORDLESS_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * The base64url challenge the client actually signed, read from
+ * clientDataJSON. Used to match a finish to the EXACT begin() it came from —
+ * the enable flow can issue several begin() calls (rebind→enroll, plus
+ * retries), so "latest unconsumed challenge" mismatches the ceremony the user
+ * completed. Works for both attestation (create) and assertion (get) responses.
+ */
+function extractClientChallenge(response: unknown): string | null {
+  try {
+    const cd = (response as { response?: { clientDataJSON?: string } })?.response
+      ?.clientDataJSON;
+    if (typeof cd !== 'string') return null;
+    const parsed = JSON.parse(
+      Buffer.from(cd, 'base64url').toString('utf8'),
+    ) as { challenge?: unknown };
+    return typeof parsed.challenge === 'string' ? parsed.challenge : null;
+  } catch {
+    return null;
+  }
+}
+
 @Injectable()
 export class BiometricService {
   private readonly logger = new Logger(BiometricService.name);
@@ -119,11 +140,25 @@ export class BiometricService {
   ) {
     const { verifyRegistrationResponse } = await import('@simplewebauthn/server');
     const { rpId, origin } = this.resolveRp(requestOrigin);
-    const challenge = await this.prisma.biometricChallenge.findFirst({
-      where: { userId, type: 'registration', consumedAt: null },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!challenge) throw new NotFoundException('No pending registration');
+    // Match the SPECIFIC challenge the browser signed, not just the latest
+    // unconsumed one — the enable flow issues multiple begin() calls, so the
+    // newest row often isn't the one this ceremony used.
+    const clientChallenge = extractClientChallenge(response);
+    const challenge = clientChallenge
+      ? await this.prisma.biometricChallenge.findFirst({
+          where: {
+            userId,
+            type: 'registration',
+            challenge: clientChallenge,
+            consumedAt: null,
+          },
+        })
+      : null;
+    if (!challenge) {
+      throw new NotFoundException(
+        'No matching registration challenge (expired or already used)',
+      );
+    }
     if (challenge.expiresAt < new Date()) throw new BadRequestException('Challenge expired');
 
     const verification = await verifyRegistrationResponse({
@@ -283,10 +318,13 @@ export class BiometricService {
   ): Promise<{ verified: true }> {
     const { verifyAuthenticationResponse } = await import('@simplewebauthn/server');
     const { rpId, origin } = this.resolveRp(requestOrigin);
-    const challenge = await this.prisma.biometricChallenge.findFirst({
-      where: { userId, type: 'rebind', consumedAt: null },
-      orderBy: { createdAt: 'desc' },
-    });
+    // Match the exact challenge the browser signed (see finishRegistration).
+    const clientChallenge = extractClientChallenge(response);
+    const challenge = clientChallenge
+      ? await this.prisma.biometricChallenge.findFirst({
+          where: { userId, type: 'rebind', challenge: clientChallenge, consumedAt: null },
+        })
+      : null;
     if (!challenge) throw new NotFoundException('No pending rebind');
     if (challenge.expiresAt < new Date()) throw new BadRequestException('Rebind challenge expired');
 
