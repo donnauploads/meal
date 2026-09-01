@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { Public } from '../modules/auth/decorators/public.decorator';
+import { redisFamilyOption } from '../common/redis-family.util';
 
 @Controller('health')
 @Public()
@@ -30,7 +31,8 @@ export class HealthController {
     }
 
     try {
-      this.redis ??= new Redis(this.config.get<string>('REDIS_URL')!, { lazyConnect: true, maxRetriesPerRequest: 1 });
+      const redisUrl = this.config.get<string>('REDIS_URL')!;
+      this.redis ??= new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1, ...redisFamilyOption(redisUrl) });
       if (this.redis.status !== 'ready') await this.redis.connect().catch(() => undefined);
       const pong = await this.redis.ping();
       checks.redis = pong === 'PONG' ? 'up' : 'down';

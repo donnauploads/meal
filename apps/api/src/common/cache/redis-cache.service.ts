@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { redisFamilyOption } from '../redis-family.util';
 
 @Injectable()
 export class RedisCacheService implements OnModuleDestroy {
@@ -8,9 +9,11 @@ export class RedisCacheService implements OnModuleDestroy {
   private readonly client: Redis;
 
   constructor(config: ConfigService) {
-    this.client = new Redis(config.get<string>('REDIS_URL') ?? 'redis://localhost:6379', {
+    const url = config.get<string>('REDIS_URL') ?? 'redis://localhost:6379';
+    this.client = new Redis(url, {
       maxRetriesPerRequest: 1,
       lazyConnect: false,
+      ...redisFamilyOption(url),
     });
     this.client.on('error', (err) => this.logger.warn(`redis: ${err.message}`));
   }
