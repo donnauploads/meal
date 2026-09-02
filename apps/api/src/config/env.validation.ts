@@ -9,6 +9,29 @@ export const envValidationSchema = Joi.object({
   // issuer, etc.
   APP_NAME: Joi.string().default('State Bank'),
 
+  // Baseline accounts seeded on startup if absent (create-if-missing). A pair
+  // is only seeded when BOTH its email and password are set; leave blank to
+  // skip. See modules/bootstrap/bootstrap-seed.service.ts.
+  SEED_ADMIN_EMAIL: Joi.string().email().allow('').optional(),
+  SEED_ADMIN_PASSWORD: Joi.string().allow('').optional(),
+  SEED_ADMIN_NAME: Joi.string().allow('').optional(),
+  SEED_USER_EMAIL: Joi.string().email().allow('').optional(),
+  SEED_USER_PASSWORD: Joi.string().allow('').optional(),
+  SEED_USER_NAME: Joi.string().allow('').optional(),
+
+  // Periodic logical backup (pg_dump primary → restore into a backup DB).
+  // Requires pg_dump/psql on PATH in the runtime. See modules/backup.
+  BACKUP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  BACKUP_TARGET_URL: Joi.string()
+    .uri({ scheme: ['postgres', 'postgresql'] })
+    .allow('')
+    .optional(),
+  BACKUP_SOURCE_URL: Joi.string()
+    .uri({ scheme: ['postgres', 'postgresql'] })
+    .allow('')
+    .optional(),
+  BACKUP_CRON: Joi.string().default('0 */6 * * *'),
+
   DATABASE_URL: Joi.string().uri({ scheme: ['postgresql', 'postgres'] }).required(),
   // Unpooled connection for Prisma migrations (schema.prisma directUrl).
   // Point it at the same DB as DATABASE_URL when no pooler is in play.

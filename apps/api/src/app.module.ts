@@ -5,6 +5,8 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
+import { BootstrapModule } from './modules/bootstrap/bootstrap.module';
+import { BackupModule } from './modules/backup/backup.module';
 import { EmailModule } from './common/email/email.module';
 import { CacheModule } from './common/cache/cache.module';
 import { EventLoggerModule } from './common/event-logger/event-logger.module';
@@ -77,6 +79,8 @@ import { MailModule } from './modules/mail/mail.module';
     ScheduleModule.forRoot(),
     buildBullMQRootModule(),
     PrismaModule,
+    BootstrapModule,
+    BackupModule,
     EmailModule,
     CacheModule,
     EventLoggerModule,

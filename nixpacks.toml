@@ -1,0 +1,14 @@
+# Railway build configuration.
+#
+# Ships the PostgreSQL 17 CLIENT tools (pg_dump, psql) in the runtime image so
+# the in-app scheduled backup (apps/api/src/modules/backup) can dump the primary
+# database and restore it into the backup database. Version 17 is used on
+# purpose: if the SOURCE is Neon (Postgres 17), pg_dump must be >= 17 or it
+# aborts with a "server version mismatch".
+#
+# ⚠️ For this file to take effect, set the Railway service's Builder to
+# "Nixpacks" (Settings → Build → Builder). Your Custom Build / Start commands
+# still apply on top of it. If the pinned nixpkgs can't resolve postgresql_17,
+# fall back to postgresql_16 (only valid when your source server is <= 16).
+[phases.setup]
+nixPkgs = ["...", "postgresql_17"]
