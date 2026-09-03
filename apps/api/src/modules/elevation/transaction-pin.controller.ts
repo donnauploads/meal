@@ -37,7 +37,7 @@ class SetPinDto {
   currentPassword?: string;
 }
 
-const VERIFY_SCOPES = ['transfer:authorize', 'profile:edit', 'card:reveal'] as const;
+const VERIFY_SCOPES = ['transfer:authorize', 'profile:edit', 'card:reveal', 'security:manage'] as const;
 
 class VerifyPinDto {
   @IsString()

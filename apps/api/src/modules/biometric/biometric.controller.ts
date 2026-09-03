@@ -3,6 +3,7 @@ import { IsDefined, IsObject, IsUUID } from 'class-validator';
 import { Request } from 'express';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser, CurrentUserPayload } from '../auth/decorators/current-user.decorator';
+import { ElevationGuard, RequiresElevation } from '../elevation/elevation.guard';
 import { BiometricService } from './biometric.service';
 
 class FinishBody {
@@ -97,8 +98,18 @@ export class BiometricController {
     );
   }
 
+  /**
+   * Remove (soft-disable) a passkey. Disabling a sign-in factor is a
+   * security downgrade, so it requires a fresh PIN step-up — the caller
+   * verifies their transaction PIN for the `security:manage` scope and
+   * passes the resulting token in the `x-elevation` header. The service
+   * emits a security notification so the account owner is alerted even if
+   * an attacker with an open session triggered it.
+   */
   @Delete(':id')
   @HttpCode(204)
+  @UseGuards(ElevationGuard)
+  @RequiresElevation('security:manage')
   remove(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
     return this.bio.remove(user.sub, id);
   }

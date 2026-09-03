@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException, Unauthorize
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { APP_NAME } from '../../common/brand';
 
 const PASSWORDLESS_CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -44,6 +45,7 @@ export class BiometricService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
     this.rpIds = splitCsv(config.get<string>('WEBAUTHN_RP_ID') ?? 'localhost');
@@ -51,6 +53,27 @@ export class BiometricService {
       config.get<string>('WEBAUTHN_ORIGIN') ?? 'http://localhost:3000',
     );
     this.rpName = config.get<string>('WEBAUTHN_RP_NAME') ?? APP_NAME;
+  }
+
+  /**
+   * Fire-and-forget security alert for a biometric change. Wrapped so a
+   * notification hiccup can never fail the underlying security action
+   * (enroll / remove) — the change is what matters; the alert is best-effort.
+   */
+  private async notifySecurity(userId: string, title: string, body: string) {
+    try {
+      await this.notifications.create({
+        userId,
+        category: 'security',
+        title,
+        body,
+        ctaUrl: '/profile/security',
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Failed to emit biometric security notification: ${(e as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -229,6 +252,11 @@ export class BiometricService {
           }),
     ]);
 
+    await this.notifySecurity(
+      userId,
+      'Biometric sign-in enabled',
+      "A passkey was added to your account. If this wasn't you, remove it and change your password right away.",
+    );
     return { verified: true };
   }
 
@@ -257,6 +285,11 @@ export class BiometricService {
       where: { id },
       data: { disabledAt: new Date() },
     });
+    await this.notifySecurity(
+      userId,
+      'Biometric sign-in disabled',
+      "A passkey was removed from your account. If this wasn't you, change your password and review your active sessions.",
+    );
   }
 
   /**
@@ -386,6 +419,11 @@ export class BiometricService {
           },
         }),
       ]);
+      await this.notifySecurity(
+        userId,
+        'Biometric sign-in enabled',
+        "A passkey was added to your account. If this wasn't you, remove it and change your password right away.",
+      );
       return { verified: true };
     }
 
@@ -419,6 +457,11 @@ export class BiometricService {
         },
       }),
     ]);
+    await this.notifySecurity(
+      userId,
+      'Biometric sign-in enabled',
+      "A passkey was added to your account. If this wasn't you, remove it and change your password right away.",
+    );
     return { verified: true };
   }
 
@@ -437,6 +480,11 @@ export class BiometricService {
       where: { id: row.id },
       data: { disabledAt: null, lastUsedAt: new Date() },
     });
+    await this.notifySecurity(
+      userId,
+      'Biometric sign-in enabled',
+      "A passkey was re-enabled on your account. If this wasn't you, remove it and change your password right away.",
+    );
     return true;
   }
 

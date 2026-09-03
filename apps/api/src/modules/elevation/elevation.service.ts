@@ -11,7 +11,8 @@ export type ElevationScope =
   | 'card:reveal'
   | 'wire:create'
   | 'transfer:authorize'
-  | 'profile:edit';
+  | 'profile:edit'
+  | 'security:manage';
 
 export interface ElevationClaims {
   sub: string;
