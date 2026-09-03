@@ -85,9 +85,13 @@ export class AuthController {
   @UseGuards(JwtAccessGuard)
   @Post('logout')
   @HttpCode(204)
-  async logout(@CurrentUser() user: CurrentUserPayload, @Res({ passthrough: true }) res: Response) {
+  async logout(
+    @CurrentUser() user: CurrentUserPayload,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     await this.auth.logout(user.sid, user.sub);
-    this.clearAuthCookies(res);
+    this.clearAuthCookies(req, res);
   }
 
   @UseGuards(JwtAccessGuard)
@@ -131,14 +135,17 @@ export class AuthController {
    * `SameSite=Lax` default.
    */
   private cookieOpts(maxAgeMs: number, req: Request) {
-    const prod = this.config.get<string>('NODE_ENV') === 'production';
     const crossSite = isCrossSite(req);
     const sameSite: 'lax' | 'none' = crossSite ? 'none' : 'lax';
-    // SameSite=None is only honored when the cookie is also Secure. Most
-    // browsers also require a secure context (https) for cross-site
-    // cookies to be sent back. ngrok / Vercel both serve over https, so
-    // forcing `secure: true` when crossSite is fine.
-    const secure = sameSite === 'none' ? true : prod;
+    // `Secure` = "only send this cookie over HTTPS". We derive it from the
+    // ACTUAL connection protocol, not NODE_ENV — Railway/Vercel don't reliably
+    // set NODE_ENV=production, which was silently leaving prod cookies non-
+    // secure. Behind their TLS-terminating proxies the app sees plain HTTP but
+    // `x-forwarded-proto: https`, so isHttps() reads the real client protocol.
+    // SameSite=None additionally REQUIRES Secure. Net effect: every real HTTPS
+    // deployment gets Secure cookies; only plain http://localhost dev doesn't
+    // (so local login still works).
+    const secure = sameSite === 'none' || isHttps(req);
     return {
       httpOnly: true,
       sameSite,
@@ -153,9 +160,14 @@ export class AuthController {
     res.cookie('refresh_token', refresh, this.cookieOpts(30 * 24 * 60 * 60 * 1000, req));
   }
 
-  private clearAuthCookies(res: Response) {
-    res.clearCookie('access_token', { path: '/' });
-    res.clearCookie('refresh_token', { path: '/' });
+  private clearAuthCookies(req: Request, res: Response) {
+    // clearCookie only removes a cookie when the sameSite/secure/path
+    // attributes match how it was set — otherwise the browser keeps the old
+    // one. Mirror cookieOpts (maxAge is irrelevant for deletion).
+    const { httpOnly, sameSite, secure, path } = this.cookieOpts(0, req);
+    const opts = { httpOnly, sameSite, secure, path };
+    res.clearCookie('access_token', opts);
+    res.clearCookie('refresh_token', opts);
   }
 }
 
@@ -165,6 +177,19 @@ export class AuthController {
  * Host header — that's the cookie-strip condition the browser applies
  * for SameSite=Lax cookies.
  */
+/**
+ * Did the browser reach us over HTTPS? Checks Express's own `req.secure`
+ * (true when `trust proxy` is set) and, more reliably behind Vercel/Railway
+ * TLS terminators, the `x-forwarded-proto` header. That header can be a
+ * comma-separated chain (e.g. "https,https") — the left-most entry is the
+ * original client-facing protocol.
+ */
+function isHttps(req: Request): boolean {
+  if (req.secure) return true;
+  const xfp = (req.headers['x-forwarded-proto'] as string | undefined) ?? '';
+  return xfp.split(',')[0]?.trim().toLowerCase() === 'https';
+}
+
 function isCrossSite(req: Request): boolean {
   const origin = (req.headers.origin as string | undefined) ?? '';
   if (!origin) return false;

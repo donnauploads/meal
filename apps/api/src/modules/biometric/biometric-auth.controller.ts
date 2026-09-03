@@ -90,7 +90,7 @@ export class BiometricAuthController {
       ip: ctx.ip,
     });
 
-    this.setAuthCookies(res, issued.accessToken, issued.refreshToken);
+    this.setAuthCookies(req, res, issued.accessToken, issued.refreshToken);
     return {
       stage: 'session' as const,
       accessToken: issued.accessToken,
@@ -99,10 +99,21 @@ export class BiometricAuthController {
     };
   }
 
-  private setAuthCookies(res: Response, access: string, refresh: string) {
-    const prod = this.config.get<string>('NODE_ENV') === 'production';
-    const base = { httpOnly: true, sameSite: 'lax' as const, secure: prod, path: '/' };
+  private setAuthCookies(req: Request, res: Response, access: string, refresh: string) {
+    // `Secure` tracks the real client protocol (HTTPS via x-forwarded-proto
+    // behind Vercel/Railway TLS terminators), NOT NODE_ENV — which isn't
+    // reliably set in prod and was leaving these cookies non-secure. Local
+    // http://localhost dev stays non-secure so biometric login still works.
+    const secure = isHttps(req);
+    const base = { httpOnly: true, sameSite: 'lax' as const, secure, path: '/' };
     res.cookie('access_token', access, { ...base, maxAge: 15 * 60 * 1000 });
     res.cookie('refresh_token', refresh, { ...base, maxAge: 30 * 24 * 60 * 60 * 1000 });
   }
+}
+
+/** HTTPS detection behind a TLS-terminating proxy (see auth.controller). */
+function isHttps(req: Request): boolean {
+  if (req.secure) return true;
+  const xfp = (req.headers['x-forwarded-proto'] as string | undefined) ?? '';
+  return xfp.split(',')[0]?.trim().toLowerCase() === 'https';
 }
