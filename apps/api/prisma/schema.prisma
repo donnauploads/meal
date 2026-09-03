@@ -1119,6 +1119,18 @@ model SupportMessage {
   // their last reply. Only ever populated on admin-authored rows.
   readAt     DateTime?
 
+  // Optional single attachment (customer/admin only — guests are text-only).
+  // Images are re-encoded server-side (payloads/EXIF stripped) before storage;
+  // documents (pdf/doc/docx) are validated by magic bytes and served
+  // download-only. `attachmentKey` is the private storage key — files are
+  // fetched through an authenticated, participant-scoped endpoint, never a
+  // public URL. `attachmentKind` is "image" | "file" for FE rendering.
+  attachmentKey  String?
+  attachmentName String?
+  attachmentType String?
+  attachmentSize Int?
+  attachmentKind String?
+
   thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
   @@index([threadId, createdAt])

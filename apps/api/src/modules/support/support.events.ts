@@ -34,6 +34,14 @@ export interface SupportMessageDto {
   senderRole: 'customer' | 'admin' | 'guest';
   body: string;
   createdAt: string;
+  /** Present only on messages carrying a file. The bytes are NOT inlined —
+   *  clients fetch them from the authenticated attachment endpoint by id. */
+  attachment?: {
+    name: string;
+    type: string;
+    size: number;
+    kind: 'image' | 'file';
+  } | null;
 }
 
 export interface SupportMessageCreatedPayload {

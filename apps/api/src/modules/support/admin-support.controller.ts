@@ -1,13 +1,19 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
   Post,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { UserRole } from '@prisma/client';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -16,7 +22,8 @@ import {
   CurrentUser,
   CurrentUserPayload,
 } from '../auth/decorators/current-user.decorator';
-import { SupportService } from './support.service';
+import { SupportService, attachmentDto } from './support.service';
+import { streamAttachment } from './support.http';
 
 class ReplyDto {
   @IsString()
@@ -24,6 +31,15 @@ class ReplyDto {
   @MaxLength(4000)
   body!: string;
 }
+
+class AttachmentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  caption?: string;
+}
+
+const UPLOAD_LIMIT_BYTES = 15 * 1024 * 1024;
 
 @UseGuards(JwtAccessGuard, RolesGuard)
 @Roles(UserRole.admin, UserRole.superadmin)
@@ -60,6 +76,7 @@ export class AdminSupportController {
       body: m.body,
       createdAt: m.createdAt.toISOString(),
       readAt: (m as { readAt?: Date | null }).readAt?.toISOString() ?? null,
+      attachment: attachmentDto(m),
     }));
   }
 
@@ -82,7 +99,49 @@ export class AdminSupportController {
       body: message.body,
       createdAt: message.createdAt.toISOString(),
       readAt: (message as { readAt?: Date | null }).readAt?.toISOString() ?? null,
+      attachment: attachmentDto(message),
     };
+  }
+
+  /** Admin uploads a single file into a thread (validated + re-encoded). */
+  @Post('threads/:id/attachment')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: UPLOAD_LIMIT_BYTES } }),
+  )
+  async attach(
+    @CurrentUser() admin: CurrentUserPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() dto: AttachmentDto,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const message = await this.support.postAdminAttachment(
+      admin.sub,
+      id,
+      dto.caption ?? '',
+      { originalname: file.originalname, mimetype: file.mimetype, buffer: file.buffer },
+    );
+    return {
+      id: message.id,
+      threadId: message.threadId,
+      senderId: message.senderId,
+      senderRole: message.senderRole,
+      body: message.body,
+      createdAt: message.createdAt.toISOString(),
+      readAt: (message as { readAt?: Date | null }).readAt?.toISOString() ?? null,
+      attachment: attachmentDto(message),
+    };
+  }
+
+  /** Authenticated download of a thread attachment (admins read any thread). */
+  @Get('threads/:id/attachment/:messageId')
+  async download(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Res() res: Response,
+  ) {
+    const loaded = await this.support.loadAttachmentForAdmin(id, messageId);
+    streamAttachment(res, loaded);
   }
 
   @Post('threads/:id/close')

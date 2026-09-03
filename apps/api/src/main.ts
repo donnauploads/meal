@@ -105,6 +105,20 @@ async function bootstrap() {
   const storageRoot = resolve(
     config.get<string>('STORAGE_FS_ROOT') ?? './tooling/storage',
   );
+
+  // Support-chat attachments live under `support/...` in the SAME storage
+  // bucket, but they are private to a thread's participants. Block them from
+  // the public storage proxy entirely — they are only reachable through the
+  // authenticated /api/v1/support(/admin) attachment endpoints, which verify
+  // the caller belongs to the thread. Registered BEFORE the static mount and
+  // the object-storage proxy below so it always wins.
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .use('/storage/support', (_req: unknown, res: { status: (n: number) => { end: () => void } }) => {
+      res.status(404).end();
+    });
+
   app.useStaticAssets(storageRoot, {
     prefix: '/storage/',
     // 1-day cache is fine — avatar filenames are immutable UUIDs.
@@ -126,6 +140,12 @@ async function bootstrap() {
   const storage = app.get<StorageDriver>(STORAGE_DRIVER);
   app.getHttpAdapter().getInstance().get(/^\/storage\/(.+)/, (req, res) => {
     const key = decodeURIComponent(req.params[0]);
+    // Never serve private support-chat attachments over the public proxy
+    // (defense-in-depth behind the /storage/support blocker above).
+    if (key === 'support' || key.startsWith('support/')) {
+      res.status(404).end();
+      return;
+    }
     storage
       .get(key)
       .then((buf) => {

@@ -27,6 +27,11 @@ type WithSupport = {
 }
 import { EmailService } from '../../common/email/email.service';
 import {
+  IncomingFile,
+  ProcessedAttachment,
+  SupportAttachmentService,
+} from './support-attachment.service';
+import {
   SUPPORT_NEST_EVENT,
   SupportMessageCreatedPayload,
   SupportMessagesReadPayload,
@@ -43,6 +48,7 @@ export class SupportService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly events: EventEmitter2,
+    private readonly attachments: SupportAttachmentService,
     config: ConfigService,
   ) {
     this.adminEmail =
@@ -187,17 +193,31 @@ export class SupportService {
     for (const d of devices) if (!deviceMap.has(d.userId)) deviceMap.set(d.userId, d);
 
     // Pull just the last message per thread in one query.
-    const lastMessages: Array<Pick<SupportMessage, 'threadId' | 'body'>> =
-      await (this.prisma as unknown as WithSupport).supportMessage.findMany({
-        where: {
-          threadId: { in: threads.map((t: SupportThread) => t.id) },
-        },
-        orderBy: { createdAt: 'desc' },
-        distinct: ['threadId'],
-        select: { threadId: true, body: true },
-      });
+    const lastMessages: Array<
+      Pick<SupportMessage, 'threadId' | 'body'> & {
+        attachmentKind?: string | null
+      }
+    > = await (this.prisma as unknown as WithSupport).supportMessage.findMany({
+      where: {
+        threadId: { in: threads.map((t: SupportThread) => t.id) },
+      },
+      orderBy: { createdAt: 'desc' },
+      distinct: ['threadId'],
+      select: { threadId: true, body: true, attachmentKind: true },
+    });
+    // Attachment-only messages have an empty body — show a placeholder so the
+    // inbox preview isn't blank.
     const bodyMap = new Map(
-      lastMessages.map((m) => [m.threadId, m.body] as const),
+      lastMessages.map((m) => {
+        const preview =
+          m.body ||
+          (m.attachmentKind === 'image'
+            ? '📷 Photo'
+            : m.attachmentKind
+              ? '📎 Attachment'
+              : '');
+        return [m.threadId, preview] as const;
+      }),
     );
 
     return threads.map((t: SupportThread) => {
@@ -287,6 +307,152 @@ export class SupportService {
 
     this.emitMessageCreated(thread, message);
     return message;
+  }
+
+  // ─── Attachments (customer + admin only; guests stay text-only) ────────
+
+  async postCustomerAttachment(
+    userId: string,
+    threadId: string,
+    caption: string,
+    file: IncomingFile,
+  ): Promise<SupportMessage> {
+    const thread = await (this.prisma as unknown as WithSupport).supportThread.findUnique({
+      where: { id: threadId },
+    });
+    if (!thread || thread.userId !== userId) {
+      throw new NotFoundException('Thread not found');
+    }
+    if (thread.status === SupportThreadStatus.closed) {
+      throw new ForbiddenException('THREAD_CLOSED');
+    }
+    // Validation + re-encode happens here; a bad file throws before we write.
+    const processed = await this.attachments.process(threadId, file);
+    return this.createAttachmentMessage(
+      thread,
+      SupportSenderRole.customer,
+      userId,
+      caption,
+      processed,
+      /* unreadForAdmins */ true,
+    );
+  }
+
+  async postAdminAttachment(
+    adminUserId: string,
+    threadId: string,
+    caption: string,
+    file: IncomingFile,
+  ): Promise<SupportMessage> {
+    const thread = await (this.prisma as unknown as WithSupport).supportThread.findUnique({
+      where: { id: threadId },
+    });
+    if (!thread) throw new NotFoundException('Thread not found');
+    // Guest (logged-out) threads are text-only in both directions — a guest
+    // has no authenticated way to fetch attachment bytes, so refuse to create
+    // one they could never open.
+    if (!thread.userId) {
+      throw new ForbiddenException('Attachments are not available in guest chats');
+    }
+    const processed = await this.attachments.process(threadId, file);
+    return this.createAttachmentMessage(
+      thread,
+      SupportSenderRole.admin,
+      adminUserId,
+      caption,
+      processed,
+      /* unreadForAdmins */ false,
+    );
+  }
+
+  private async createAttachmentMessage(
+    thread: SupportThread,
+    senderRole: SupportSenderRole,
+    senderId: string,
+    caption: string,
+    a: ProcessedAttachment,
+    unreadForAdmins: boolean,
+  ): Promise<SupportMessage> {
+    const body = (caption ?? '').trim().slice(0, 4000);
+    const [message] = await this.prisma.$transaction([
+      (this.prisma as unknown as WithSupport).supportMessage.create({
+        data: {
+          threadId: thread.id,
+          senderId,
+          senderRole,
+          body,
+          attachmentKey: a.key,
+          attachmentName: a.name,
+          attachmentType: a.type,
+          attachmentSize: a.size,
+          attachmentKind: a.kind,
+        },
+      }),
+      (this.prisma as unknown as WithSupport).supportThread.update({
+        where: { id: thread.id },
+        data: {
+          lastMessageAt: new Date(),
+          unreadForAdmins,
+          status: SupportThreadStatus.open,
+        },
+      }),
+    ]);
+    this.emitMessageCreated(thread, message);
+    return message;
+  }
+
+  /** Authorize + load an attachment's bytes for the customer who owns it. */
+  async loadAttachmentForUser(
+    userId: string,
+    threadId: string,
+    messageId: string,
+  ) {
+    const message = await this.requireAttachmentMessage(threadId, messageId);
+    const thread = await (this.prisma as unknown as WithSupport).supportThread.findUnique({
+      where: { id: threadId },
+    });
+    if (!thread || thread.userId !== userId) {
+      throw new NotFoundException('Attachment not found');
+    }
+    return this.readAttachment(message);
+  }
+
+  /** Admins may read any thread's attachments. */
+  async loadAttachmentForAdmin(threadId: string, messageId: string) {
+    const message = await this.requireAttachmentMessage(threadId, messageId);
+    return this.readAttachment(message);
+  }
+
+  private async requireAttachmentMessage(
+    threadId: string,
+    messageId: string,
+  ): Promise<SupportMessage> {
+    const message = await (this.prisma as unknown as WithSupport).supportMessage.findUnique({
+      where: { id: messageId },
+    });
+    const m = message as
+      | (SupportMessage & { attachmentKey?: string | null })
+      | null;
+    if (!m || m.threadId !== threadId || !m.attachmentKey) {
+      throw new NotFoundException('Attachment not found');
+    }
+    return m;
+  }
+
+  private async readAttachment(message: SupportMessage) {
+    const m = message as SupportMessage & {
+      attachmentKey: string;
+      attachmentName: string | null;
+      attachmentType: string | null;
+      attachmentKind: string | null;
+    };
+    const buffer = await this.attachments.fetchBytes(m.attachmentKey);
+    return {
+      buffer,
+      name: m.attachmentName ?? 'file',
+      type: m.attachmentType ?? 'application/octet-stream',
+      kind: (m.attachmentKind as 'image' | 'file' | null) ?? 'file',
+    };
   }
 
   /**
@@ -479,6 +645,7 @@ export class SupportService {
         senderRole: message.senderRole,
         body: message.body,
         createdAt: message.createdAt.toISOString(),
+        attachment: attachmentDto(message),
       },
       at: new Date(),
     } satisfies SupportMessageCreatedPayload);
@@ -523,4 +690,32 @@ export class SupportService {
       );
     }
   }
+}
+
+/**
+ * Shape a message row's attachment for the wire (realtime + HTTP). Returns
+ * null for text-only messages. The storage key is intentionally NOT exposed —
+ * clients fetch bytes through the authenticated attachment endpoint by
+ * message id, never by key.
+ */
+export function attachmentDto(message: SupportMessage): {
+  name: string;
+  type: string;
+  size: number;
+  kind: 'image' | 'file';
+} | null {
+  const m = message as SupportMessage & {
+    attachmentKey?: string | null;
+    attachmentName?: string | null;
+    attachmentType?: string | null;
+    attachmentSize?: number | null;
+    attachmentKind?: string | null;
+  };
+  if (!m.attachmentKey) return null;
+  return {
+    name: m.attachmentName ?? 'file',
+    type: m.attachmentType ?? 'application/octet-stream',
+    size: m.attachmentSize ?? 0,
+    kind: (m.attachmentKind as 'image' | 'file') ?? 'file',
+  };
 }
