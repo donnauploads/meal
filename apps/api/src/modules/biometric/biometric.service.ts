@@ -263,10 +263,34 @@ export class BiometricService {
   async list(userId: string) {
     // Hide soft-deleted (toggled-off) rows so the security overview
     // reads as "biometric off" without an actual hard-delete.
-    return this.prisma.biometricEnrollment.findMany({
+    const rows = await this.prisma.biometricEnrollment.findMany({
       where: { userId, disabledAt: null },
       orderBy: { createdAt: 'desc' },
       select: { id: true, deviceId: true, createdAt: true, lastUsedAt: true, transports: true },
+    });
+    if (rows.length === 0) return [];
+    // Join the Device the enrollment is bound to so the UI can label each
+    // passkey by the actual device (OS/browser) instead of a generic string.
+    const deviceIds = [...new Set(rows.map((r) => r.deviceId).filter(Boolean))];
+    const devices = deviceIds.length
+      ? await this.prisma.device.findMany({
+          where: { id: { in: deviceIds } },
+          select: { id: true, name: true, os: true, browser: true },
+        })
+      : [];
+    const byId = new Map(devices.map((d) => [d.id, d]));
+    return rows.map((r) => {
+      const d = byId.get(r.deviceId);
+      return {
+        id: r.id,
+        deviceId: r.deviceId,
+        createdAt: r.createdAt,
+        lastUsedAt: r.lastUsedAt,
+        transports: r.transports,
+        device: d
+          ? { name: d.name ?? null, os: d.os ?? null, browser: d.browser ?? null }
+          : null,
+      };
     });
   }
 
