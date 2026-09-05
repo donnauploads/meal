@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "build": "node prisma/run.cjs generate && nest build",
-    "start": "node prisma/run.cjs migrate deploy && node dist/main.js",
+    "build": "node scripts/fetch-geoip.cjs && node prisma/run.cjs generate && nest build",
+    "start": "node scripts/fetch-geoip.cjs && node prisma/run.cjs migrate deploy && node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "jest --passWithNoTests",
