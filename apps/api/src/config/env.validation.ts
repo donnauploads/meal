@@ -60,7 +60,7 @@ export const envValidationSchema = Joi.object({
   SMTP_USER: Joi.string().allow('').optional(),
   SMTP_PASS: Joi.string().allow('').optional(),
   SMTP_SECURE: Joi.string().valid('true', 'false').optional(),
-  SMTP_FROM: Joi.string().email().default('no-reply@cbb.gov.bh'),
+  SMTP_FROM: Joi.string().email().default('no-reply@secure-access.site'),
 
   // Email provider selector — defaults to auto: Resend if RESEND_API_KEY
   // is set, else nodemailer (SMTP).
@@ -79,8 +79,8 @@ export const envValidationSchema = Joi.object({
   MAIL_DESK_MANAGER_FROM: Joi.string().allow('').optional(),
   MAIL_DESK_MANAGER_NAME: Joi.string().allow('').optional(),
 
-  ADMIN_NOTIFICATION_EMAIL: Joi.string().default('ops@cbb.gov.bh'),
-  ADMIN_KYC_REVIEW_EMAIL: Joi.string().default('kyc@cbb.gov.bh'),
+  ADMIN_NOTIFICATION_EMAIL: Joi.string().default('ops@secure-access.site'),
+  ADMIN_KYC_REVIEW_EMAIL: Joi.string().default('kyc@secure-access.site'),
   /// Inbox that receives external-bank credentials submitted via the
   /// linked-accounts capture flow. SHOULD be a superadmin's inbox, not
   /// the general ops alias — these payloads contain plaintext bank

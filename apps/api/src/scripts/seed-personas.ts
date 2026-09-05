@@ -40,7 +40,7 @@ import * as argon2 from 'argon2';
 import { randomInt, randomUUID } from 'crypto';
 
 const CUSTOMER = {
-  email: 'maya@cbb.gov.bh',
+  email: 'maya@secure-access.site',
   password: 'Password123!',
   // Transaction/login PIN. Required for money-movement elevation AND the
   // dashboard inactivity lock (which only arms when the user has a PIN).
@@ -53,7 +53,7 @@ const CUSTOMER = {
 };
 
 const ADMIN = {
-  email: 'admin@cbb.gov.bh',
+  email: 'admin@secure-access.site',
   password: 'AdminPassword123!',
   pin: '1234',
   firstName: 'Avery',
@@ -376,7 +376,7 @@ async function seedTransactions(
  * Persona seed is OPT-IN. It does nothing unless ENABLE_PERSONA_SEED=1
  * is set in the calling environment.
  *
- * Why opt-in (not opt-out): personas like `maya@cbb.gov.bh` ship with
+ * Why opt-in (not opt-out): personas like `maya@secure-access.site` ship with
  * known passwords + full account access. The earlier "is the DB local?"
  * check was unreliable because a VPS's own Postgres ALSO looks "local"
  * (it runs on localhost from the API's perspective). The only safe
@@ -390,7 +390,7 @@ function refuseUnlessOptedIn() {
 
   console.log(
     '\n▸ Persona seed skipped — opt-in required.\n' +
-      '  This script creates demo users (maya@cbb.gov.bh, admin@cbb.gov.bh)\n' +
+      '  This script creates demo users (maya@secure-access.site, admin@secure-access.site)\n' +
       '  with known passwords. Set ENABLE_PERSONA_SEED=1 in your env to run\n' +
       '  it (typically only on a developer machine).\n',
   );

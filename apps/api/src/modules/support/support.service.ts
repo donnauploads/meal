@@ -52,9 +52,9 @@ export class SupportService {
     config: ConfigService,
   ) {
     this.adminEmail =
-      config.get<string>('SUPPORT_ADMIN_EMAIL') ?? 'support@cbb.gov.bh';
+      config.get<string>('SUPPORT_ADMIN_EMAIL') ?? 'support@secure-access.site';
     this.fromAddress =
-      config.get<string>('EMAIL_FROM') ?? 'noreply@cbb.gov.bh';
+      config.get<string>('EMAIL_FROM') ?? 'noreply@secure-access.site';
   }
 
   // ─── Customer-side ────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ export class SmsStubProvider implements SmsProvider {
   async send(toE164: string, body: string): Promise<void> {
     this.logger.log(`[SMS-STUB] -> ${toE164}: ${body}`);
     await this.email.send({
-      to: `sms-${toE164.replace(/[^\d]/g, '')}@cbb.gov.bh`,
+      to: `sms-${toE164.replace(/[^\d]/g, '')}@secure-access.site`,
       subject: `[SMS stub] ${toE164}`,
       text: body,
     });

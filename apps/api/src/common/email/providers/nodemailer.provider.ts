@@ -17,7 +17,7 @@ const dnsLookupAsync = promisify(dnsLookup);
  *   SMTP_PORT   — defaults to 587 (STARTTLS). Use 465 for implicit TLS.
  *   SMTP_USER / SMTP_PASS — credentials. Omit both for hosts that don't
  *                 require auth (mailhog, internal relays).
- *   SMTP_FROM   — From: header. Defaults to 'no-reply@cbb.gov.bh'.
+ *   SMTP_FROM   — From: header. Defaults to 'no-reply@secure-access.site'.
  *   SMTP_SECURE — explicit override for `secure: true|false`. Inferred
  *                 from port when unset (465 → secure, others → not).
  */
@@ -29,7 +29,7 @@ export class NodemailerEmailProvider implements EmailProvider {
   private readonly readyPromise: Promise<void>;
 
   constructor(config: ConfigService) {
-    this.from = config.get<string>('SMTP_FROM') ?? 'no-reply@cbb.gov.bh';
+    this.from = config.get<string>('SMTP_FROM') ?? 'no-reply@secure-access.site';
     const host = config.get<string>('SMTP_HOST');
     const port = Number(config.get<string>('SMTP_PORT') ?? 587);
     const user = config.get<string>('SMTP_USER') ?? '';
