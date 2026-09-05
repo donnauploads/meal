@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CityResponse, Reader, open } from 'maxmind';
+import type { GeoipAdapter } from './geoip.adapter';
 
 export interface GeoLocation {
   city?: string;
@@ -13,7 +14,7 @@ export interface GeoLocation {
 }
 
 @Injectable()
-export class MaxmindAdapter implements OnModuleInit {
+export class MaxmindAdapter implements OnModuleInit, GeoipAdapter {
   private readonly logger = new Logger(MaxmindAdapter.name);
   private reader?: Reader<CityResponse>;
 
@@ -33,7 +34,8 @@ export class MaxmindAdapter implements OnModuleInit {
     }
   }
 
-  lookup(ip: string): GeoLocation {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async lookup(ip: string): Promise<GeoLocation> {
     if (!this.reader) return {};
     try {
       const r = this.reader.get(ip);

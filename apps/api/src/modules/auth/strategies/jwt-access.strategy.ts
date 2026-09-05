@@ -72,7 +72,7 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
       try {
         const ip = readIp(req);
         if (session.deviceId && ip) {
-          const location = this.geoip.resolve(ip);
+          const location = await this.geoip.resolve(ip);
           await this.prisma.device.update({
             where: { id: session.deviceId },
             data: {

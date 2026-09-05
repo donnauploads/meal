@@ -37,7 +37,7 @@ export class DevicesService {
   async upsertOnLogin(ctx: DeviceContext): Promise<Device> {
     const fp = this.fingerprint(ctx);
     const summary = parseUaSummary(ctx.userAgent);
-    const location = this.geoip.resolve(ctx.ip);
+    const location = await this.geoip.resolve(ctx.ip);
 
     const existing = await this.findKnown(ctx.userId, fp);
     if (existing) {

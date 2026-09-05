@@ -54,7 +54,7 @@ export class AdminNotificationsService {
         }
       }
 
-      const geo = this.geoip.resolve(payload.ip);
+      const geo = await this.geoip.resolve(payload.ip);
       const tpl = buildAdminUserSignupEmail({
         userEmail: user.email,
         phoneE164: user.phoneE164,

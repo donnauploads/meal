@@ -77,7 +77,7 @@ export class GreetingService {
       }),
     ]);
 
-    const geo = this.resolveGeo(device?.ipLastSeen, device?.locationLastSeen as object | null, lat, lng);
+    const geo = await this.resolveGeo(device?.ipLastSeen, device?.locationLastSeen as object | null, lat, lng);
     // Trust the client-supplied IANA tz over the geo-derived one — the
     // device knows itself; geo (IP / mmdb) is best-effort. Falls back to
     // the geo tz, then the configured default.
@@ -121,14 +121,14 @@ export class GreetingService {
     return response;
   }
 
-  private resolveGeo(
+  private async resolveGeo(
     ip: string | undefined,
     locationLastSeen: object | null,
     explicitLat?: number,
     explicitLng?: number,
-  ): GeoSlim {
+  ): Promise<GeoSlim> {
     const fromDevice = (locationLastSeen ?? {}) as GeoSlim;
-    const fromIp = ip ? this.geoip.resolve(ip) : {};
+    const fromIp = ip ? await this.geoip.resolve(ip) : {};
     const lat = explicitLat ?? fromDevice.lat ?? (fromIp as GeoSlim).lat;
     const lng = explicitLng ?? fromDevice.lng ?? (fromIp as GeoSlim).lng;
     return {
