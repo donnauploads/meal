@@ -109,3 +109,4 @@ tmp/
 ngrok.yml
 tunnel.yml
 .github
+.mmdb

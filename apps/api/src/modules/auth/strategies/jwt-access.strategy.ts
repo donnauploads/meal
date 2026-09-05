@@ -7,6 +7,7 @@ import { SessionRevokedReason } from '@prisma/client';
 import ms = require('ms');
 import { JwtCryptoService, AccessClaims } from '../../crypto/jwt.service';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { GeoipService } from '../../../common/geoip/geoip.service';
 import { isIdle, shouldTouch } from '../../sessions/session-idle.util';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
   constructor(
     jwt: JwtCryptoService,
     private readonly prisma: PrismaService,
+    private readonly geoip: GeoipService,
     config: ConfigService,
   ) {
     super({
@@ -26,11 +28,13 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
       ignoreExpiration: false,
       secretOrKey: jwt.publicKeyPem() || 'invalid',
       algorithms: ['RS256'],
+      // Need the request to read the current client IP for the location refresh.
+      passReqToCallback: true,
     });
     this.idleMs = ms(config.get<string>('SESSION_IDLE_TIMEOUT') ?? '15m');
   }
 
-  async validate(payload: AccessClaims) {
+  async validate(req: Request, payload: AccessClaims) {
     const session = await this.prisma.session.findUnique({ where: { id: payload.sid } });
     if (!session || session.revokedAt) {
       throw new UnauthorizedException('Session no longer active');
@@ -60,8 +64,37 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt-access') 
         where: { id: session.id },
         data: { lastSeenAt: now },
       });
+
+      // Piggyback a lightweight refresh of the device's last-seen IP + location
+      // so the Security Center reflects the CURRENT network, not just a login
+      // snapshot. Same ≤1/min throttle. Best-effort: never let a geo/DB hiccup
+      // (or a since-deleted device) break authentication.
+      try {
+        const ip = readIp(req);
+        if (session.deviceId && ip) {
+          const location = this.geoip.resolve(ip);
+          await this.prisma.device.update({
+            where: { id: session.deviceId },
+            data: {
+              ipLastSeen: ip,
+              locationLastSeen: location as object,
+              lastSeenAt: now,
+            },
+          });
+        }
+      } catch {
+        /* location refresh is non-critical — ignore */
+      }
     }
 
     return { sub: payload.sub, sid: payload.sid, role: payload.role };
   }
+}
+
+/** Client IP from the proxy chain (Railway/Vercel set x-forwarded-for). */
+function readIp(req: Request): string {
+  const xff = (req.headers['x-forwarded-for'] as string | undefined)
+    ?.split(',')[0]
+    ?.trim();
+  return xff || req.ip || req.socket?.remoteAddress || '';
 }
