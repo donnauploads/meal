@@ -38,6 +38,10 @@ export class BackupService {
   private readonly sourceUrl: string;
   private readonly targetUrl: string;
   private running = false;
+  // Set once pg_dump/psql are found to be missing, so we stop retrying (and
+  // spamming ERROR logs) every schedule tick. Cleared only by a restart —
+  // i.e. after the tools are actually installed.
+  private toolsUnavailable = false;
 
   constructor(config: ConfigService) {
     this.enabled = config.get<boolean>('BACKUP_ENABLED') === true;
@@ -58,7 +62,7 @@ export class BackupService {
 
   @Cron(BACKUP_CRON, { name: 'db-backup' })
   async runBackup(): Promise<void> {
-    if (!this.enabled) return;
+    if (!this.enabled || this.toolsUnavailable) return;
     if (!this.targetUrl || !this.sourceUrl) {
       this.logger.warn(
         'DB backup skipped: BACKUP_TARGET_URL and/or a resolvable source URL are not set.',
@@ -93,10 +97,20 @@ export class BackupService {
       );
     } catch (err) {
       const msg = (err as Error).message;
-      const hint = /ENOENT/.test(msg)
-        ? ' (pg_dump/psql not found on PATH — install the Postgres client tools)'
-        : '';
-      this.logger.error(`DB backup failed${hint}: ${msg}`);
+      if (/ENOENT/.test(msg)) {
+        // The Postgres client tools aren't installed in this image. Retrying
+        // every tick just spams the log — disable until the next restart
+        // (i.e. until the tools are actually shipped) and say so once.
+        this.toolsUnavailable = true;
+        this.logger.warn(
+          'DB backup disabled: pg_dump/psql not found on PATH. Install the ' +
+            'Postgres client tools (Railway: set Builder=Nixpacks so nixpacks.toml ' +
+            'ships postgresql_17) or set BACKUP_ENABLED=false to silence this. ' +
+            'Skipping further attempts until restart.',
+        );
+      } else {
+        this.logger.error(`DB backup failed: ${msg}`);
+      }
     } finally {
       await unlink(file).catch(() => undefined);
       this.running = false;
